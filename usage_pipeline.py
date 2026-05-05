@@ -15,11 +15,52 @@ import json
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 # --- Step 2: tier rules. First matching substring wins (most specific first; avoids o3-mini matching o3). ---
 TIER_RULES_ORDERED: list[tuple[str, float]] = [
+    ("gpt-5.5-extra-high", 1.0),
+    ("gpt-5.5-high", 0.95),
+    ("gpt-5.5-medium", 0.9),
+    ("gpt-5.4-xhigh-fast", 0.98),
+    ("gpt-5.4-xhigh", 0.97),
+    ("gpt-5.4-high-fast", 0.94),
+    ("gpt-5.4-high", 0.92),
+    ("gpt-5.4-medium", 0.88),
+    ("gpt-5.3-codex-xhigh-fast", 0.97),
+    ("gpt-5.3-codex-xhigh", 0.95),
+    ("gpt-5.3-codex-high-fast", 0.92),
+    ("gpt-5.3-codex-high", 0.9),
+    ("gpt-5.3-codex-fast", 0.85),
+    ("gpt-5.3-codex", 0.88),
+    ("gpt-5.2-high", 0.9),
+    ("gpt-5.1-codex-max-xhigh", 1.0),
+    ("claude-4.6-opus-max-thinking-fast", 1.0),
+    ("claude-4.6-opus-max-thinking", 1.0),
+    ("claude-4.6-opus-high-thinking-fast", 1.0),
+    ("claude-4.6-opus-high-thinking", 1.0),
+    ("claude-4.6-opus-max", 1.0),
+    ("claude-4.6-opus-high", 1.0),
+    ("claude-4.6-sonnet-medium-thinking", 0.78),
+    ("claude-4.6-sonnet-medium", 0.76),
+    ("claude-4.5-opus-high-thinking", 1.0),
+    ("claude-4.5-opus-high", 1.0),
+    ("claude-opus-4-7-thinking-max", 1.0),
+    ("claude-opus-4-7-thinking-xhigh", 1.0),
+    ("claude-opus-4-7-thinking-high", 1.0),
+    ("claude-opus-4-7-thinking-medium", 1.0),
+    ("claude-opus-4-7-max", 1.0),
+    ("claude-opus-4-7-xhigh", 1.0),
+    ("claude-opus-4-7-high", 1.0),
+    ("claude-opus-4-7-medium", 1.0),
+    ("claude-4.5-sonnet-thinking", 0.72),
+    ("claude-4.5-sonnet", 0.7),
+    ("claude-4-sonnet-thinking", 0.7),
+    ("claude-4-sonnet", 0.68),
+    ("claude-4.5-haiku-thinking", 0.4),
+    ("claude-4.5-haiku", 0.4),
     ("gpt-4o-mini", 0.5),
     ("gpt-4o", 0.85),
     ("gpt-4.1", 0.9),
@@ -43,6 +84,52 @@ TIER_RULES_ORDERED: list[tuple[str, float]] = [
 ]
 
 DEFAULT_TIER = 0.5
+
+MODEL_ALIAS_RULES: list[tuple[str, str]] = [
+    ("gpt-5.5-extra-high", "gpt-5.5-extra-high"),
+    ("gpt-5.5-high", "gpt-5.5-high"),
+    ("gpt-5.5-medium", "gpt-5.5-medium"),
+    ("gpt-5.4-xhigh-fast", "gpt-5.4-xhigh-fast"),
+    ("gpt-5.4-xhigh", "gpt-5.4-xhigh"),
+    ("gpt-5.4-high-fast", "gpt-5.4-high-fast"),
+    ("gpt-5.4-high", "gpt-5.4-high"),
+    ("gpt-5.4-medium", "gpt-5.4-medium"),
+    ("gpt-5.3-codex-xhigh-fast", "gpt-5.3-codex-xhigh-fast"),
+    ("gpt-5.3-codex-xhigh", "gpt-5.3-codex-xhigh"),
+    ("gpt-5.3-codex-high-fast", "gpt-5.3-codex-high-fast"),
+    ("gpt-5.3-codex-high", "gpt-5.3-codex-high"),
+    ("gpt-5.3-codex-fast", "gpt-5.3-codex-fast"),
+    ("gpt-5.3-codex", "gpt-5.3-codex"),
+    ("gpt-5.2-high", "gpt-5.2-high"),
+    ("gpt-5.1-codex-max-xhigh", "gpt-5.1-codex-max-xhigh"),
+    ("claude-4.6-opus-max-thinking-fast", "claude-4.6-opus-max-thinking-fast"),
+    ("claude-4.6-opus-max-thinking", "claude-4.6-opus-max-thinking"),
+    ("claude-4.6-opus-high-thinking-fast", "claude-4.6-opus-high-thinking-fast"),
+    ("claude-4.6-opus-high-thinking", "claude-4.6-opus-high-thinking"),
+    ("claude-4.6-opus-max", "claude-4.6-opus-max"),
+    ("claude-4.6-opus-high", "claude-4.6-opus-high"),
+    ("claude-4.6-sonnet-medium-thinking", "claude-4.6-sonnet-medium-thinking"),
+    ("claude-4.6-sonnet-medium", "claude-4.6-sonnet-medium"),
+    ("claude-4.5-opus-high-thinking", "claude-4.5-opus-high-thinking"),
+    ("claude-4.5-opus-high", "claude-4.5-opus-high"),
+    ("claude-opus-4-7-thinking-max", "claude-opus-4-7-thinking-max"),
+    ("claude-opus-4-7-thinking-xhigh", "claude-opus-4-7-thinking-xhigh"),
+    ("claude-opus-4-7-thinking-high", "claude-opus-4-7-thinking-high"),
+    ("claude-opus-4-7-thinking-medium", "claude-opus-4-7-thinking-medium"),
+    ("claude-opus-4-7-max", "claude-opus-4-7-max"),
+    ("claude-opus-4-7-xhigh", "claude-opus-4-7-xhigh"),
+    ("claude-opus-4-7-high", "claude-opus-4-7-high"),
+    ("claude-opus-4-7-medium", "claude-opus-4-7-medium"),
+    ("claude-4.5-sonnet-thinking", "claude-4.5-sonnet-thinking"),
+    ("claude-4.5-sonnet", "claude-4.5-sonnet"),
+    ("claude-4-sonnet-thinking", "claude-4-sonnet-thinking"),
+    ("claude-4-sonnet", "claude-4-sonnet"),
+    ("claude-4.5-haiku-thinking", "claude-4.5-haiku-thinking"),
+    ("claude-4.5-haiku", "claude-4.5-haiku"),
+    ("composer-2-fast", "composer-2-fast"),
+    ("composer-2", "composer-2"),
+    ("gemini-3.1-pro-preview", "gemini-3.1-pro-preview"),
+]
 
 # --- Pricing catalog: one candidate per row (ordered: first match wins for model -> tier). ---
 @dataclass(frozen=True)
@@ -85,6 +172,79 @@ def norm_model(model: str) -> str:
     return model.strip().lower()
 
 
+def parse_cursor_timestamp(ts: Any) -> str:
+    """Normalize Cursor event timestamps to YYYY-MM-DD."""
+    if ts is None:
+        return ""
+    s = str(ts).strip()
+    if not s:
+        return ""
+    # Cursor may return ms epoch as string or ISO 8601 in different endpoints.
+    try:
+        if s.isdigit():
+            n = int(s)
+            if n > 10_000_000_000:  # milliseconds
+                return datetime.fromtimestamp(n / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            return datetime.fromtimestamp(n, tz=timezone.utc).strftime("%Y-%m-%d")
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.fromisoformat(s).date().isoformat()
+    except Exception:
+        return s[:10]
+
+
+def cursor_cache_tokens(row: dict[str, Any]) -> int:
+    tok = row.get("tokenUsage") if isinstance(row.get("tokenUsage"), dict) else {}
+    return int(tok.get("cacheReadTokens") or 0) + int(tok.get("cacheWriteTokens") or 0)
+
+
+def cursor_cost_usd(row: dict[str, Any]) -> float:
+    tok = row.get("tokenUsage") if isinstance(row.get("tokenUsage"), dict) else {}
+    charged_cents = row.get("chargedCents")
+    total_cents = tok.get("totalCents")
+    cents = charged_cents if charged_cents is not None else total_cents
+    try:
+        return float(cents or 0.0) / 100.0
+    except Exception:
+        return 0.0
+
+
+def cursor_request_row_to_usage_row(row: dict[str, Any]) -> dict[str, Any]:
+    tok = row.get("tokenUsage") if isinstance(row.get("tokenUsage"), dict) else {}
+    is_token_based = bool(row.get("isTokenBasedCall"))
+    cached = cursor_cache_tokens(row)
+    tool_turns = 1 if row.get("isHeadless") else 0
+    requests_costs = row.get("requestsCosts")
+    try:
+        requests_costs_val = float(requests_costs or 0.0)
+    except Exception:
+        requests_costs_val = 0.0
+    return {
+        "date": parse_cursor_timestamp(row.get("timestamp")),
+        "provider": "Cursor",
+        "model": row.get("model") or "",
+        "user_email": row.get("userEmail") or "",
+        "requests_count": 1,
+        "input_tokens": int(tok.get("inputTokens") or 0),
+        "output_tokens": int(tok.get("outputTokens") or 0),
+        "cached_tokens": cached,
+        "cost_usd": cursor_cost_usd(row),
+        "tool_turns": tool_turns,
+        "web_search_requests": 0,
+        "cursor_kind": row.get("kind") or "",
+        "cursor_max_mode": bool(row.get("maxMode")),
+        "cursor_chargeable": bool(row.get("isChargeable")),
+        "cursor_headless": bool(row.get("isHeadless")),
+        "cursor_is_token_based": is_token_based,
+        "cursor_requests_costs": requests_costs_val,
+        "cursor_token_fee": float(row.get("cursorTokenFee") or 0.0),
+    }
+
+
+def is_cursor_filtered_usage_events(raw: Any) -> bool:
+    return isinstance(raw, dict) and "usageEvents" in raw and isinstance(raw.get("usageEvents"), list)
+
+
 def model_tier(model: str) -> float:
     m = norm_model(model)
     for sub, t in TIER_RULES_ORDERED:
@@ -95,6 +255,11 @@ def model_tier(model: str) -> float:
 
 def resolve_price_candidate(model: str) -> PriceCandidate | None:
     m = norm_model(model)
+    for alias, canonical in MODEL_ALIAS_RULES:
+        if alias in m:
+            for c in PRICE_CANDIDATES:
+                if c.key == canonical:
+                    return c
     for c in PRICE_CANDIDATES:
         for pat in c.matchers:
             if pat in m:
@@ -129,12 +294,27 @@ def vendor_from_model(model: str) -> str | None:
     """First-match vendor map (spec Step 4)."""
     m = norm_model(model)
     rules: list[tuple[str, str]] = [
+        ("gpt-5.5", "OpenAI"),
+        ("gpt-5.4", "OpenAI"),
+        ("gpt-5.3", "OpenAI"),
+        ("gpt-5.2", "OpenAI"),
+        ("gpt-5.1", "OpenAI"),
         ("gpt-", "OpenAI"),
         ("o1", "OpenAI"),
         ("o3", "OpenAI"),
+        ("claude-4.6", "Anthropic"),
+        ("claude-4.5", "Anthropic"),
+        ("claude-4-sonnet", "Anthropic"),
+        ("claude-opus-4-7", "Anthropic"),
         ("claude-", "Anthropic"),
+        ("gemini-3.1", "Google"),
+        ("gemini-2.5", "Google"),
+        ("gemini-2.0", "Google"),
+        ("gemini-1.5", "Google"),
         ("gemini", "Google"),
+        ("composer-", "Cursor"),
         ("cursor-", "Cursor"),
+        ("default", "Cursor"),
     ]
     for sub, v in rules:
         if sub in m:
@@ -251,12 +431,6 @@ def plain_english_why_cheaper(
 
     parts.append(f'You are on {current_friendly} (model id "{raw_model}").')
 
-    if not ok_global and not ok_same:
-        parts.append(
-            "None of the catalog models we price would cut your estimated bill by at least 5% "
-            "for this same pattern of input and output tokens, so we are not suggesting a move on cost alone."
-        )
-        return " ".join(parts)
 
     parts.append(
         "The following options use public list prices and your recorded input/output mix; "
@@ -368,6 +542,12 @@ class Agg:
     total_cost: float = 0.0
     tools: int = 0
     wsr: int = 0
+    cursor_kind_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    cursor_headless_count: int = 0
+    cursor_chargeable_count: int = 0
+    cursor_token_based_count: int = 0
+    cursor_requests_costs: float = 0.0
+    cursor_token_fee: float = 0.0
     dates: set[str] = field(default_factory=set)
 
 
@@ -391,6 +571,17 @@ def aggregate(rows: list[dict[str, Any]]) -> list[Agg]:
         g.total_cost += float(d.get("cost_usd") or 0.0)
         g.tools += int(d.get("tool_turns") or 0)
         g.wsr += int(d.get("web_search_requests") or 0)
+        kind = d.get("cursor_kind")
+        if kind:
+            g.cursor_kind_counts[str(kind)] += 1
+        if d.get("cursor_headless"):
+            g.cursor_headless_count += 1
+        if d.get("cursor_chargeable"):
+            g.cursor_chargeable_count += 1
+        if d.get("cursor_is_token_based"):
+            g.cursor_token_based_count += 1
+        g.cursor_requests_costs += float(d.get("cursor_requests_costs") or 0.0)
+        g.cursor_token_fee += float(d.get("cursor_token_fee") or 0.0)
         dt = d.get("date")
         if dt:
             ds = str(dt)
@@ -520,6 +711,12 @@ def process_agg(g: Agg) -> dict[str, Any]:
         "recommendation_same_vendor": fmt_cand(b_cand) if sv else "—",
         "is_cheaper_same_vendor": ok_b if sv else False,
         "est_savings_same_vendor_usd": round(save_b, 4) if ok_b and sv else None,
+        "cursor_kind_counts": dict(sorted(g.cursor_kind_counts.items())),
+        "cursor_headless_count": g.cursor_headless_count,
+        "cursor_chargeable_count": g.cursor_chargeable_count,
+        "cursor_token_based_count": g.cursor_token_based_count,
+        "cursor_requests_costs": round(g.cursor_requests_costs, 6),
+        "cursor_token_fee": round(g.cursor_token_fee, 6),
         "explanation": " ".join(expl_parts),
         "why_cheaper_plain_english": why_plain,
     }
@@ -565,6 +762,9 @@ def write_xlsx(
     ws0.append(["Total cost (opportunity rows only)", total_cost])
     ws0.append(["Est. savings (any vendor)", sg])
     ws0.append(["Est. savings (same vendor)", sb])
+    if all_rows and "cursor_requests_costs" in all_rows[0]:
+        ws0.append(["Cursor requests costs", sum(r.get("cursor_requests_costs") or 0 for r in all_rows)])
+        ws0.append(["Cursor token fee", sum(r.get("cursor_token_fee") or 0 for r in all_rows)])
 
     ws1 = wb.create_sheet("Opportunities")
     if opportunities:
@@ -637,7 +837,10 @@ def main() -> None:
     args = ap.parse_args()
 
     raw = json.loads(args.input_json.read_text(encoding="utf-8"))
-    records = unwrap_records(raw)
+    if is_cursor_filtered_usage_events(raw):
+        records = [cursor_request_row_to_usage_row(r) for r in raw.get("usageEvents", [])]
+    else:
+        records = unwrap_records(raw)
     aggs = aggregate(records)
     processed = [process_agg(g) for g in aggs]
     processed.sort(key=lambda r: (-(r.get("total_cost_usd") or 0), r["user_email"], r["model"]))
