@@ -286,6 +286,8 @@ def normalize_provider(p: str | None) -> str | None:
         "google": "Google",
         "google ai": "Google",
         "cursor": "Cursor",
+        "claude code": "Claude Code",
+        "claude-code": "Claude Code",
     }
     return mapping.get(s, p.strip().title())
 
@@ -431,7 +433,6 @@ def plain_english_why_cheaper(
 
     parts.append(f'You are on {current_friendly} (model id "{raw_model}").')
 
-
     parts.append(
         "The following options use public list prices and your recorded input/output mix; "
         "each is at least roughly 5% cheaper than your current tier for that mix."
@@ -460,6 +461,24 @@ def plain_english_why_cheaper(
             )
 
     return " ".join(parts)
+
+
+def plain_english_claude_code_consolidation(
+    *,
+    row_provider: str | None,
+    row_vendor_name: str | None,
+    user_has_claude_code: bool,
+) -> str | None:
+    """Explain when Cursor Anthropic usage can be consolidated into Claude Code."""
+    if not user_has_claude_code:
+        return None
+    if row_provider != "Cursor" or row_vendor_name != "Anthropic":
+        return None
+    return (
+        "You also use Claude Code for Anthropic work, so this Cursor Anthropic usage is a candidate for consolidation. "
+        "If the workflow does not require Cursor-specific editor features, moving the Anthropic task to Claude Code "
+        "can be cheaper and avoids paying for the same vendor across two surfaces."
+    )
 
 
 def pick_recommendation(
@@ -603,7 +622,7 @@ def aggregate(rows: list[dict[str, Any]]) -> list[Agg]:
     return list(groups.values())
 
 
-def process_agg(g: Agg) -> dict[str, Any]:
+def process_agg(g: Agg, *, user_has_claude_code: bool = False) -> dict[str, Any]:
     tr = g.total_requests
     tin, tout = g.total_input, g.total_output
     active_days = len(g.dates) if g.dates else max(1, tr)
@@ -685,6 +704,15 @@ def process_agg(g: Agg) -> dict[str, Any]:
         vendor_name=sv,
     )
 
+    claude_code_note = plain_english_claude_code_consolidation(
+        row_provider=g.provider,
+        row_vendor_name=sv,
+        user_has_claude_code=user_has_claude_code,
+    )
+    if claude_code_note:
+        expl_parts.append(f"Claude Code consolidation: {claude_code_note}")
+        why_plain = f"{why_plain} {claude_code_note}"
+
     return {
         "user_email": g.user_email,
         "user_name": g.user_name,
@@ -711,6 +739,8 @@ def process_agg(g: Agg) -> dict[str, Any]:
         "recommendation_same_vendor": fmt_cand(b_cand) if sv else "—",
         "is_cheaper_same_vendor": ok_b if sv else False,
         "est_savings_same_vendor_usd": round(save_b, 4) if ok_b and sv else None,
+        "claude_code_consolidation": bool(claude_code_note),
+        "claude_code_consolidation_note": claude_code_note,
         "cursor_kind_counts": dict(sorted(g.cursor_kind_counts.items())),
         "cursor_headless_count": g.cursor_headless_count,
         "cursor_chargeable_count": g.cursor_chargeable_count,
@@ -720,7 +750,6 @@ def process_agg(g: Agg) -> dict[str, Any]:
         "explanation": " ".join(expl_parts),
         "why_cheaper_plain_english": why_plain,
     }
-
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
@@ -842,7 +871,15 @@ def main() -> None:
     else:
         records = unwrap_records(raw)
     aggs = aggregate(records)
-    processed = [process_agg(g) for g in aggs]
+    user_providers: dict[str, set[str]] = defaultdict(set)
+    for g in aggs:
+        if g.provider:
+            user_providers[g.user_email].add(g.provider)
+
+    processed = [
+        process_agg(g, user_has_claude_code=("Claude Code" in user_providers.get(g.user_email, set())))
+        for g in aggs
+    ]
     processed.sort(key=lambda r: (-(r.get("total_cost_usd") or 0), r["user_email"], r["model"]))
 
     opportunities = [
